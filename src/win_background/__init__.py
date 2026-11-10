@@ -12,5 +12,5 @@ from .log import logger
 from .notify import notify
 from .process import NO_WINDOW
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["NO_WINDOW", "Lock", "Task", "exclusive", "key", "logger", "notify", "python_command", "single_instance"]

@@ -103,6 +103,14 @@ class Autostart(unittest.TestCase):
             wb.Task("t").enable("x.exe", [], at_logon=False)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_every_is_for_jobs_a_minute_or_more_apart(self):
+        import datetime as dt
+        with self.assertRaises(ValueError):
+            wb.Task("t").enable("x.exe", [], every=dt.timedelta(minutes=5))   # keep_running defaults to True
+        with self.assertRaises(ValueError):
+            wb.Task("t").enable("x.exe", [], every=dt.timedelta(seconds=30), keep_running=False)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
     def test_status_of_a_task_that_does_not_exist(self):
         self.assertIsNone(wb.Task("win-background test, never created").status())
 

@@ -51,22 +51,32 @@ class Task:
         self.results = results or {}
 
     def enable(self, exe: str, args: list, working_dir: pathlib.Path | str | None = None, *,
-               at_logon: bool = True, daily_at: str | None = None, keep_running: bool = True,
-               time_limit: dt.timedelta = dt.timedelta(minutes=30), start_now: bool = True) -> str:
+               at_logon: bool = True, daily_at: str | None = None, every: dt.timedelta | None = None,
+               keep_running: bool = True, time_limit: dt.timedelta = dt.timedelta(minutes=30),
+               start_now: bool = True) -> str:
         """Create or replace the task, and start it now unless start_now is False. Returns the command line.
 
         keep_running: a watcher. Restarted up to 3 times, 5 minutes apart, if it exits with an error,
-        and never stopped for time. Otherwise a job, stopped after time_limit."""
+        and never stopped for time. Otherwise a job, stopped after time_limit.
+        every: run the job repeatedly at this interval, indefinitely, from now (0.2.0). A run still going
+        when the next is due is left to finish, and the next is skipped."""
         if sys.platform != "win32":
             raise RuntimeError("autostart needs Windows Task Scheduler.")
-        if not (at_logon or daily_at):
-            raise ValueError("A task needs a trigger: at_logon, daily_at, or both.")
+        if not (at_logon or daily_at or every):
+            raise ValueError("A task needs a trigger: at_logon, daily_at, every, or a mix.")
+        if every is not None and (keep_running or every < dt.timedelta(minutes=1)):
+            raise ValueError("every is for a job (keep_running=False), at least a minute apart.")
         line = subprocess.list2cmdline(args)
         triggers = []
         if daily_at:
             triggers.append(f"(New-ScheduledTaskTrigger -Daily -At {quote(daily_at)})")
         if at_logon:
             triggers.append("(New-ScheduledTaskTrigger -AtLogOn -User $me)")
+        if every:
+            # No -RepetitionDuration: without one the repetition is indefinite, and [TimeSpan]::MaxValue,
+            # the usual workaround, is refused by Windows 10 and later.
+            triggers.append(f"(New-ScheduledTaskTrigger -Once -At (Get-Date) "
+                            f"-RepetitionInterval (New-TimeSpan -Seconds {int(every.total_seconds())}))")
         if keep_running:
             limits = "-ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)"
         else:
