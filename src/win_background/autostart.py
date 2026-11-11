@@ -90,7 +90,7 @@ $triggers = @({', '.join(triggers)})
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
     {limits} -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
-if (Get-ScheduledTask -TaskName {quote(self.name)} -ErrorAction SilentlyContinue) {{ Stop-ScheduledTask -TaskName {quote(self.name)} }}
+{self._stop_and_wait()}
 Register-ScheduledTask -TaskName {quote(self.name)} -Action $action -Trigger $triggers -Settings $settings -Principal $principal `
     -Description {quote(self.description)} -Force | Out-Null
 {"Start-ScheduledTask -TaskName " + quote(self.name) if start_now else ""}
@@ -99,11 +99,44 @@ Register-ScheduledTask -TaskName {quote(self.name)} -Action $action -Trigger $tr
             raise RuntimeError(f"Couldn't create the task: {(done.stderr or done.stdout).strip()[:400]}")
         return f"{exe} {line}"
 
+    def _stop_and_wait(self) -> str:
+        """PowerShell: stop the task, then wait (up to 30 seconds) until its process has actually gone.
+
+        Stop-ScheduledTask returns before the process exits. Starting again at once lost the race on 11 Nov 2026:
+        the new watcher found the old one still holding its single-instance lock and exited, then the old one
+        exited too, leaving no watcher at all. The process is found by the task's own arguments."""
+        return f"""
+$existing = Get-ScheduledTask -TaskName {quote(self.name)} -ErrorAction SilentlyContinue
+if ($existing) {{
+  $taskArgs = $existing.Actions[0].Arguments
+  Stop-ScheduledTask -TaskName {quote(self.name)}
+  $deadline = (Get-Date).AddSeconds(30)
+  while ($taskArgs -and (Get-Date) -lt $deadline) {{
+    $alive = Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains($taskArgs) }}
+    if (-not $alive) {{ break }}
+    Start-Sleep -Milliseconds 500
+  }}
+}}"""
+
+    def restart(self) -> bool:
+        """Stop the task, wait for its process to go, and start it again: how a watcher picks up new code.
+        False if there's no task."""
+        if sys.platform != "win32":
+            return False
+        done = powershell(f"""
+{self._stop_and_wait()}
+if ($existing) {{ Start-ScheduledTask -TaskName {quote(self.name)}; 'restarted' }}
+exit 0
+""")
+        if done.returncode:
+            raise RuntimeError(f"Couldn't restart the task: {(done.stderr or done.stdout).strip()[:400]}")
+        return "restarted" in done.stdout
+
     def disable(self) -> bool:
         """Stop and remove the task. False if there wasn't one."""
         done = powershell(f"""
-$task = Get-ScheduledTask -TaskName {quote(self.name)} -ErrorAction SilentlyContinue
-if ($task) {{ Stop-ScheduledTask -TaskName {quote(self.name)}; Unregister-ScheduledTask -TaskName {quote(self.name)} -Confirm:$false; 'removed' }}
+{self._stop_and_wait()}
+if ($existing) {{ Unregister-ScheduledTask -TaskName {quote(self.name)} -Confirm:$false; 'removed' }}
 exit 0
 """)
         if done.returncode:
