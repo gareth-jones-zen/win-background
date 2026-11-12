@@ -121,5 +121,45 @@ class Autostart(unittest.TestCase):
         self.assertIsNone(wb.Task("win-background test, never created").status())
 
 
+class Power(unittest.TestCase):
+    def test_powercfg_output_gives_ac_then_dc(self):
+        text = """Power Setting GUID: 29f6c1db-86da-48c5-9fdb-f2b67b1f44da  (Sleep after)
+    Minimum Possible Setting: 0x00000000
+    Maximum Possible Setting: 0xffffffff
+  Current AC Power Setting Index: 0x0000012c
+  Current DC Power Setting Index: 0x000000b4
+"""
+        self.assertEqual(wb.power.parse_powercfg(text, True), 300)
+        self.assertEqual(wb.power.parse_powercfg(text, False), 180)
+        self.assertIsNone(wb.power.parse_powercfg("Invalid Parameters", True))
+
+    def test_a_screensaver_locks_only_when_active_secure_chosen_and_timed(self):
+        locks = wb.power.Screensaver(True, True, 1800, "scrnsave.scr", False)
+        self.assertTrue(locks.locks)
+        for change in ({"active": False}, {"secure": False}, {"program": None}, {"timeout": 0}):
+            values = {**locks.__dict__, **change}
+            self.assertFalse(wb.power.Screensaver(**values).locks, change)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_live_readings_are_sane(self):
+        self.assertIn(wb.power.on_mains(), (True, False, None))
+        self.assertGreaterEqual(wb.power.idle_seconds(), 0)
+        settings = wb.power.lock_settings()
+        self.assertIsNotNone(settings.sleep_after)
+        self.assertIsNotNone(settings.screensaver)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows only")
+    def test_a_request_is_set_seen_and_cleared(self):
+        request = wb.power.SystemRequired("win-background test")
+        try:
+            request.hold(True)
+            self.assertTrue(wb.power.execution_state() & wb.power.ES_SYSTEM_REQUIRED)
+            request.hold(True)   # twice is fine
+        finally:
+            request.close()
+        self.assertFalse(request.held)
+        self.assertIsNone(request.handle)
+
+
 if __name__ == "__main__":
     unittest.main()
