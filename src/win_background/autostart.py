@@ -50,6 +50,17 @@ class Task:
         self.description = description or name
         self.results = results or {}
 
+    @property
+    def _which(self) -> str:
+        """PowerShell: the task's -TaskName, and its -TaskPath when it's in a folder ("\\Claude EA\\Transcript
+        watcher"). Passing the whole path as -TaskName finds nothing, so until 0.2.2 (12 Nov 2026) a task in a
+        folder looked missing: restart() said "no such task" and status() returned None."""
+        name = self.name.strip("\\")
+        if "\\" not in name:
+            return f"-TaskName {quote(name)}"
+        folder, leaf = name.rsplit("\\", 1)
+        return f"-TaskName {quote(leaf)} -TaskPath {quote(chr(92) + folder + chr(92))}"
+
     def enable(self, exe: str, args: list, working_dir: pathlib.Path | str | None = None, *,
                at_logon: bool = True, daily_at: str | None = None, every: dt.timedelta | None = None,
                keep_running: bool = True, time_limit: dt.timedelta = dt.timedelta(minutes=30),
@@ -91,9 +102,9 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
     {limits} -MultipleInstances IgnoreNew
 $principal = New-ScheduledTaskPrincipal -UserId $me -LogonType Interactive -RunLevel Limited
 {self._stop_and_wait()}
-Register-ScheduledTask -TaskName {quote(self.name)} -Action $action -Trigger $triggers -Settings $settings -Principal $principal `
+Register-ScheduledTask {self._which} -Action $action -Trigger $triggers -Settings $settings -Principal $principal `
     -Description {quote(self.description)} -Force | Out-Null
-{"Start-ScheduledTask -TaskName " + quote(self.name) if start_now else ""}
+{"Start-ScheduledTask " + self._which if start_now else ""}
 """)
         if done.returncode:
             raise RuntimeError(f"Couldn't create the task: {(done.stderr or done.stdout).strip()[:400]}")
@@ -106,10 +117,10 @@ Register-ScheduledTask -TaskName {quote(self.name)} -Action $action -Trigger $tr
         the new watcher found the old one still holding its single-instance lock and exited, then the old one
         exited too, leaving no watcher at all. The process is found by the task's own arguments."""
         return f"""
-$existing = Get-ScheduledTask -TaskName {quote(self.name)} -ErrorAction SilentlyContinue
+$existing = Get-ScheduledTask {self._which} -ErrorAction SilentlyContinue
 if ($existing) {{
   $taskArgs = $existing.Actions[0].Arguments
-  Stop-ScheduledTask -TaskName {quote(self.name)}
+  Stop-ScheduledTask {self._which}
   $deadline = (Get-Date).AddSeconds(30)
   while ($taskArgs -and (Get-Date) -lt $deadline) {{
     $alive = Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains($taskArgs) }}
@@ -125,7 +136,7 @@ if ($existing) {{
             return False
         done = powershell(f"""
 {self._stop_and_wait()}
-if ($existing) {{ Start-ScheduledTask -TaskName {quote(self.name)}; 'restarted' }}
+if ($existing) {{ Start-ScheduledTask {self._which}; 'restarted' }}
 exit 0
 """)
         if done.returncode:
@@ -136,7 +147,7 @@ exit 0
         """Stop and remove the task. False if there wasn't one."""
         done = powershell(f"""
 {self._stop_and_wait()}
-if ($existing) {{ Unregister-ScheduledTask -TaskName {quote(self.name)} -Confirm:$false; 'removed' }}
+if ($existing) {{ Unregister-ScheduledTask {self._which} -Confirm:$false; 'removed' }}
 exit 0
 """)
         if done.returncode:
@@ -148,9 +159,9 @@ exit 0
         if sys.platform != "win32":
             return None
         done = powershell(f"""
-$task = Get-ScheduledTask -TaskName {quote(self.name)} -ErrorAction SilentlyContinue
+$task = Get-ScheduledTask {self._which} -ErrorAction SilentlyContinue
 if ($task) {{
-  $info = Get-ScheduledTaskInfo -TaskName {quote(self.name)}
+  $info = Get-ScheduledTaskInfo {self._which}
   "state=$($task.State)"
   "command=$($task.Actions[0].Execute) $($task.Actions[0].Arguments)"
   "last_run=$($info.LastRunTime)"

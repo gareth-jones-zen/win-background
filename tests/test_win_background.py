@@ -89,6 +89,12 @@ class Autostart(unittest.TestCase):
         self.assertEqual(args, ["-m", "my_tool", "--config", "x.toml", "watch"])
         self.assertTrue(pathlib.Path(exe).exists())
 
+    def test_a_task_in_a_folder_is_selected_by_path_and_name(self):
+        # 12 Nov 2026: the whole path as a bare -TaskName found nothing
+        self.assertEqual(wb.Task(r"\Claude EA\Transcript watcher")._which,
+                         "-TaskName 'Transcript watcher' -TaskPath '\\Claude EA\\'")
+        self.assertEqual(wb.Task("mail-triage watch")._which, "-TaskName 'mail-triage watch'")
+
     def test_status_parsing(self):
         task = wb.Task("t", results={"3": "another watcher was already running"})
         self.assertIsNone(task.parse_status(""))
